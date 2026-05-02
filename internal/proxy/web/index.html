@@ -109,11 +109,6 @@
         <input id="upstream" value="https://api.z.ai/anthropic" spellcheck="false">
         <label for="model">Model</label>
         <input id="model" value="glm-4.6" spellcheck="false">
-        <label for="style">URL style</label>
-        <select id="style">
-          <option value="raw">Human-readable raw URL</option>
-          <option value="encoded">Base64url encoded URL</option>
-        </select>
         <pre id="endpoint"></pre>
         <button class="copy" type="button" data-copy="endpoint">Copy endpoint</button>
         <h2 style="margin-top:22px">Codex config</h2>
@@ -139,20 +134,15 @@
   <script>
     const upstream = document.getElementById('upstream');
     const model = document.getElementById('model');
-    const style = document.getElementById('style');
     const endpoint = document.getElementById('endpoint');
     const config = document.getElementById('config');
     const tabC2C = document.getElementById('tab-c2c');
     const tabFuture = document.getElementById('tab-codex2claude');
     let mode = 'claude2codex';
 
-    function b64url(value) {
-      return btoa(unescape(encodeURIComponent(value))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
     function proxyBase() {
       const base = location.origin === 'null' ? 'https://llmproxy.sandbox0.ai' : location.origin;
       const url = upstream.value.trim().replace(/\/+$/, '');
-      if (style.value === 'encoded') return base + '/' + mode + '/u/' + b64url(url) + '/v1';
       return base + '/' + mode + '/' + url + '/v1';
     }
     function render() {
@@ -174,8 +164,7 @@
         config.textContent = 'codex2claude is planned. Use claude2codex for the first release.';
       }
     }
-    [upstream, model, style].forEach(el => el.addEventListener('input', render));
-    style.addEventListener('change', render);
+    [upstream, model].forEach(el => el.addEventListener('input', render));
     tabC2C.addEventListener('click', () => {
       mode = 'claude2codex';
       tabC2C.classList.add('active');

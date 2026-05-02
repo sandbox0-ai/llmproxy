@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"encoding/base64"
 	"testing"
 )
 
@@ -15,17 +14,6 @@ func TestParseClaude2CodexRouteRawURL(t *testing.T) {
 	}
 	if route.Endpoint != "/responses" {
 		t.Fatalf("endpoint = %q", route.Endpoint)
-	}
-}
-
-func TestParseClaude2CodexRouteEncodedURL(t *testing.T) {
-	encoded := base64.RawURLEncoding.EncodeToString([]byte("https://api.z.ai/anthropic"))
-	route, err := parseClaude2CodexRoute("/claude2codex/u/" + encoded + "/v1/responses")
-	if err != nil {
-		t.Fatalf("parse route: %v", err)
-	}
-	if route.UpstreamBase != "https://api.z.ai/anthropic" {
-		t.Fatalf("upstream = %q", route.UpstreamBase)
 	}
 }
 

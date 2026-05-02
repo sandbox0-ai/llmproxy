@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -28,22 +27,6 @@ func parseClaude2CodexRoute(path string) (targetRoute, error) {
 	}
 	if rest == "" {
 		return targetRoute{}, errors.New("missing upstream URL")
-	}
-
-	if strings.HasPrefix(rest, "u/") {
-		encoded, suffix, ok := strings.Cut(strings.TrimPrefix(rest, "u/"), "/")
-		if !ok {
-			return targetRoute{}, errors.New("encoded upstream route is missing endpoint")
-		}
-		decoded, err := base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return targetRoute{}, fmt.Errorf("invalid encoded upstream URL: %w", err)
-		}
-		endpoint, err := normalizeResponsesEndpoint("/" + suffix)
-		if err != nil {
-			return targetRoute{}, err
-		}
-		return targetRoute{UpstreamBase: string(decoded), Endpoint: endpoint}, nil
 	}
 
 	for _, suffix := range []string{"/v1/responses/compact", "/responses/compact", "/v1/responses", "/responses"} {

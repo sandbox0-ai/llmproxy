@@ -29,12 +29,6 @@ Codex appends `/responses`, so the request reaches:
 POST /claude2codex/https://api.z.ai/anthropic/v1/responses
 ```
 
-The service also supports an encoded form for generated configs:
-
-```text
-https://llmproxy.sandbox0.ai/claude2codex/u/<base64url-upstream>/v1
-```
-
 ## Environment
 
 | Variable | Description |
