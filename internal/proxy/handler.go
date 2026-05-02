@@ -69,11 +69,7 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotImplemented, "responses compact is not implemented yet")
 		return
 	}
-	upstreamURL, err := anthropicMessagesURL(route.UpstreamBase)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+	upstreamURL := route.AnthropicMessagesURL
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	body, err := io.ReadAll(r.Body)

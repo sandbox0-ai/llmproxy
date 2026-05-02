@@ -16,8 +16,8 @@ const (
 )
 
 type targetRoute struct {
-	UpstreamBase string
-	Endpoint     string
+	AnthropicMessagesURL string
+	Endpoint             string
 }
 
 func parseClaude2CodexRoute(path string) (targetRoute, error) {
@@ -31,15 +31,21 @@ func parseClaude2CodexRoute(path string) (targetRoute, error) {
 
 	for _, suffix := range []string{"/v1/responses/compact", "/responses/compact", "/v1/responses", "/responses"} {
 		if strings.HasSuffix(rest, suffix) {
-			base := strings.TrimSuffix(rest, suffix)
-			if base == "" {
+			upstream := strings.TrimSuffix(rest, suffix)
+			if upstream == "" {
 				return targetRoute{}, errors.New("missing upstream URL")
 			}
 			endpoint, _ := normalizeResponsesEndpoint(suffix)
-			return targetRoute{UpstreamBase: base, Endpoint: endpoint}, nil
+			u, err := validateAnthropicMessagesURL(upstream)
+			if err != nil {
+				return targetRoute{}, err
+			}
+			u.RawQuery = ""
+			u.Fragment = ""
+			return targetRoute{AnthropicMessagesURL: u.String(), Endpoint: endpoint}, nil
 		}
 	}
-	return targetRoute{}, errors.New("path must end in /responses or /v1/responses")
+	return targetRoute{}, errors.New("path must contain an upstream Anthropic Messages URL followed by /responses")
 }
 
 func normalizeResponsesEndpoint(endpoint string) (string, error) {
@@ -53,20 +59,15 @@ func normalizeResponsesEndpoint(endpoint string) (string, error) {
 	}
 }
 
-func anthropicMessagesURL(upstreamBase string) (string, error) {
-	u, err := validateUpstreamURL(upstreamBase)
+func validateAnthropicMessagesURL(upstream string) (*url.URL, error) {
+	u, err := validateUpstreamURL(upstream)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	basePath := strings.TrimRight(u.EscapedPath(), "/")
-	if strings.HasSuffix(basePath, "/v1") {
-		u.Path = strings.TrimRight(u.Path, "/") + "/messages"
-	} else {
-		u.Path = strings.TrimRight(u.Path, "/") + "/v1/messages"
+	if !strings.HasSuffix(strings.TrimRight(u.EscapedPath(), "/"), "/messages") {
+		return nil, errors.New("upstream URL must be an Anthropic Messages endpoint ending in /messages")
 	}
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
+	return u, nil
 }
 
 func validateUpstreamURL(raw string) (*url.URL, error) {

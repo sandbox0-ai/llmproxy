@@ -105,8 +105,8 @@
           <button id="tab-codex2claude" type="button">Codex → Claude</button>
         </div>
         <h2>Generate endpoint</h2>
-        <label for="upstream">Upstream provider base URL</label>
-        <input id="upstream" value="https://api.z.ai/anthropic" spellcheck="false">
+        <label for="upstream">Anthropic Messages URL</label>
+        <input id="upstream" value="https://api.z.ai/anthropic/v1/messages" spellcheck="false">
         <label for="model">Model</label>
         <input id="model" value="glm-4.6" spellcheck="false">
         <pre id="endpoint"></pre>
@@ -143,7 +143,7 @@
     function proxyBase() {
       const base = location.origin === 'null' ? 'https://llmproxy.sandbox0.ai' : location.origin;
       const url = upstream.value.trim().replace(/\/+$/, '');
-      return base + '/' + mode + '/' + url + '/v1';
+      return base + '/' + mode + '/' + url;
     }
     function render() {
       const base = proxyBase();

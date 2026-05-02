@@ -17,21 +17,17 @@ The service listens on `:8080` by default. Override with `PORT` or
 
 ## URL Shape
 
-Configure Codex with this base URL:
+Take the provider's Anthropic Messages URL:
 
 ```text
-https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/anthropic/v1
+https://api.z.ai/anthropic/v1/messages
 ```
 
-Codex uses the OpenAI Responses API, so it sends requests to
-`{base_url}/responses`. The resulting request path is:
+Put `https://llmproxy.sandbox0.ai/claude2codex/` in front of it:
 
 ```text
-POST /claude2codex/https://api.z.ai/anthropic/v1/responses
+https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/anthropic/v1/messages
 ```
-
-Users only need to copy the base URL. The `/responses` suffix is added by
-Codex or any other Responses API client.
 
 ## Environment
 
@@ -45,7 +41,7 @@ Codex or any other Responses API client.
 
 Implemented:
 
-- `POST /claude2codex/{upstream}/v1/responses`
+- `claude2codex` for Anthropic Messages URLs
 - OpenAI Responses text input to Anthropic Messages
 - Function tool call and tool result conversion
 - Anthropic Messages text/tool output to OpenAI Responses

@@ -5,32 +5,32 @@ import (
 )
 
 func TestParseClaude2CodexRouteRawURL(t *testing.T) {
-	route, err := parseClaude2CodexRoute("/claude2codex/https://api.z.ai/anthropic/v1/responses")
+	route, err := parseClaude2CodexRoute("/claude2codex/https://api.z.ai/anthropic/v1/messages/responses")
 	if err != nil {
 		t.Fatalf("parse route: %v", err)
 	}
-	if route.UpstreamBase != "https://api.z.ai/anthropic" {
-		t.Fatalf("upstream = %q", route.UpstreamBase)
+	if route.AnthropicMessagesURL != "https://api.z.ai/anthropic/v1/messages" {
+		t.Fatalf("upstream = %q", route.AnthropicMessagesURL)
 	}
 	if route.Endpoint != "/responses" {
 		t.Fatalf("endpoint = %q", route.Endpoint)
 	}
 }
 
-func TestAnthropicMessagesURL(t *testing.T) {
-	got, err := anthropicMessagesURL("https://api.z.ai/anthropic")
+func TestParseClaude2CodexRouteV1ResponsesSuffix(t *testing.T) {
+	route, err := parseClaude2CodexRoute("/claude2codex/https://api.z.ai/anthropic/v1/messages/v1/responses")
 	if err != nil {
-		t.Fatalf("anthropic URL: %v", err)
+		t.Fatalf("parse route: %v", err)
 	}
-	if got != "https://api.z.ai/anthropic/v1/messages" {
-		t.Fatalf("url = %q", got)
+	if route.AnthropicMessagesURL != "https://api.z.ai/anthropic/v1/messages" {
+		t.Fatalf("upstream = %q", route.AnthropicMessagesURL)
 	}
-	got, err = anthropicMessagesURL("https://api.z.ai/anthropic/v1")
-	if err != nil {
-		t.Fatalf("anthropic URL: %v", err)
-	}
-	if got != "https://api.z.ai/anthropic/v1/messages" {
-		t.Fatalf("url with v1 = %q", got)
+}
+
+func TestParseClaude2CodexRouteRejectsNonMessagesURL(t *testing.T) {
+	_, err := parseClaude2CodexRoute("/claude2codex/https://api.z.ai/anthropic/v1/responses")
+	if err == nil {
+		t.Fatal("parse route succeeded, want error")
 	}
 }
 
