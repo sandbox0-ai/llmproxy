@@ -61,6 +61,7 @@ jobs:
 
       - name: Deploy
         run: |
+          kubectl -n "$KUBE_NAMESPACE" delete ingress llmproxy --ignore-not-found
           kubectl apply -f deploy/k8s.yaml
           kubectl -n "$KUBE_NAMESPACE" set image deployment/llmproxy llmproxy="${IMAGE_REPOSITORY}:${GITHUB_SHA}"
           kubectl -n "$KUBE_NAMESPACE" rollout status deployment/llmproxy --timeout=180s
