@@ -52,11 +52,11 @@ func TestConvertResponsesWebSearchTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convert: %v", err)
 	}
-	if !got.UsesWebSearch {
-		t.Fatal("UsesWebSearch = false")
-	}
 	if len(got.Request.Tools) != 1 || got.Request.Tools[0].Name != proxyWebSearchToolName {
 		t.Fatalf("tools = %#v", got.Request.Tools)
+	}
+	if got.Request.Tools[0].Type != "web_search_20250305" {
+		t.Fatalf("tool type = %q", got.Request.Tools[0].Type)
 	}
 }
 

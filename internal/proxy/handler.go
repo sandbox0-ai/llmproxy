@@ -14,7 +14,6 @@ import (
 
 	"github.com/sandbox0-ai/llmproxy/internal/anthropic"
 	"github.com/sandbox0-ai/llmproxy/internal/openairesp"
-	"github.com/sandbox0-ai/llmproxy/internal/websearch"
 )
 
 const maxBodyBytes = 50 * 1024 * 1024
@@ -24,19 +23,16 @@ const maxResponseBytes = 100 * 1024 * 1024
 var embeddedWeb embed.FS
 
 type Config struct {
-	WebSearchKey string
 }
 
 type Handler struct {
-	client       *http.Client
-	searchClient websearch.Client
+	client *http.Client
 }
 
 func NewHandler(cfg Config) *Handler {
 	client := newSecureHTTPClient()
 	return &Handler{
-		client:       client,
-		searchClient: websearch.Client{APIKey: cfg.WebSearchKey, HTTP: client},
+		client: client,
 	}
 }
 
@@ -97,22 +93,10 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	stream := req.Stream
-	if converted.UsesWebSearch {
-		// Search requires one or more model-tool-model turns. Execute that loop
-		// non-streaming, then serialize the final answer in the client's requested
-		// shape. This keeps the protocol correct without exposing proxy internals.
-		stream = false
-	}
-
-	resp, err := h.runAnthropicLoop(ctx, r, upstreamURL, converted.Request, stream, converted.UsesWebSearch)
+	resp, err := h.callAnthropic(ctx, r, upstreamURL, converted.Request, req.Stream)
 	if err != nil {
 		slog.Warn("claude2codex upstream failed", "upstream", upstreamURL, "error", err)
 		writeJSONError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if stream {
-		h.streamAnthropicToResponses(w, req.Model, resp)
 		return
 	}
 	out := convertAnthropicToResponses(resp, req.Model)
@@ -124,42 +108,8 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-func (h *Handler) runAnthropicLoop(ctx context.Context, original *http.Request, upstreamURL string, req anthropic.Request, stream bool, canSearch bool) (anthropic.Response, error) {
-	for turn := 0; turn < 4; turn++ {
-		req.Stream = false
-		if stream && !canSearch {
-			req.Stream = true
-		}
-		resp, err := h.callAnthropic(ctx, original, upstreamURL, req)
-		if err != nil {
-			return anthropic.Response{}, err
-		}
-		if !canSearch {
-			return resp, nil
-		}
-		searchBlock, ok := firstWebSearchToolUse(resp)
-		if !ok {
-			return resp, nil
-		}
-		query := searchQuery(searchBlock.Input)
-		formatted, _, err := h.searchClient.Search(ctx, query)
-		if err != nil {
-			formatted = "Web search failed: " + err.Error()
-		}
-		req.Messages = append(req.Messages,
-			anthropic.Message{Role: "assistant", Content: resp.Content},
-			anthropic.Message{Role: "user", Content: []anthropic.ContentBlock{{
-				Type:      "tool_result",
-				ToolUseID: searchBlock.ID,
-				Content:   formatted,
-				IsError:   strings.HasPrefix(formatted, "Web search failed:"),
-			}}},
-		)
-	}
-	return anthropic.Response{}, fmt.Errorf("web search tool loop exceeded limit")
-}
-
-func (h *Handler) callAnthropic(ctx context.Context, original *http.Request, upstreamURL string, req anthropic.Request) (anthropic.Response, error) {
+func (h *Handler) callAnthropic(ctx context.Context, original *http.Request, upstreamURL string, req anthropic.Request, stream bool) (anthropic.Response, error) {
+	req.Stream = stream
 	body, err := json.Marshal(req)
 	if err != nil {
 		return anthropic.Response{}, err
@@ -212,23 +162,6 @@ func copyAuthToAnthropic(dst, src http.Header) {
 		dst.Set("X-Api-Key", token)
 		dst.Set("Authorization", "Bearer "+token)
 	}
-}
-
-func firstWebSearchToolUse(resp anthropic.Response) (anthropic.ContentBlock, bool) {
-	for _, block := range resp.Content {
-		if block.Type == "tool_use" && block.Name == proxyWebSearchToolName {
-			return block, true
-		}
-	}
-	return anthropic.ContentBlock{}, false
-}
-
-func searchQuery(raw json.RawMessage) string {
-	var payload struct {
-		Query string `json:"query"`
-	}
-	_ = json.Unmarshal(raw, &payload)
-	return payload.Query
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {

@@ -24,9 +24,7 @@ func main() {
 		addr = ":" + port
 	}
 
-	handler := proxy.NewHandler(proxy.Config{
-		WebSearchKey: os.Getenv("LLMPROXY_WEB_SEARCH_KEY"),
-	})
+	handler := proxy.NewHandler(proxy.Config{})
 
 	server := &http.Server{
 		Addr:              addr,

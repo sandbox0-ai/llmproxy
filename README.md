@@ -35,7 +35,6 @@ https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/anthropic/v1/messages
 | --- | --- |
 | `PORT` | HTTP port when `LLMPROXY_ADDR` is unset. |
 | `LLMPROXY_ADDR` | Full listen address, for example `:8080`. |
-| `LLMPROXY_WEB_SEARCH_KEY` | Tavily (`tvly-...`) or Brave (`BSA...`) key for proxy-side web search. |
 
 ## Current Status
 
@@ -44,9 +43,9 @@ Implemented:
 - `claude2codex` for Anthropic Messages URLs
 - OpenAI Responses text input to Anthropic Messages
 - Function tool call and tool result conversion
+- OpenAI `web_search` tool to Anthropic `web_search_20250305` server tool conversion
 - Anthropic Messages text/tool output to OpenAI Responses
 - SSE response shape for streaming clients
-- Proxy-side `web_search` tool loop when `LLMPROXY_WEB_SEARCH_KEY` is configured
 - Static landing page and config generator at `/`
 - SSRF hardening for dynamic upstream URLs
 

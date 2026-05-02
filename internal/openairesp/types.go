@@ -47,6 +47,7 @@ type OutputItem struct {
 	CallID    string        `json:"call_id,omitempty"`
 	Name      string        `json:"name,omitempty"`
 	Arguments string        `json:"arguments,omitempty"`
+	Action    any           `json:"action,omitempty"`
 }
 
 type ContentPart struct {

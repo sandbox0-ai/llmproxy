@@ -12,8 +12,7 @@ import (
 const proxyWebSearchToolName = "web_search"
 
 type convertedRequest struct {
-	Request       anthropic.Request
-	UsesWebSearch bool
+	Request anthropic.Request
 }
 
 type inputItem struct {
@@ -59,13 +58,13 @@ func convertResponsesToAnthropic(req openairesp.Request, upstreamModel string) (
 		out.System = strings.Join(systemParts, "\n\n")
 	}
 
-	tools, usesSearch, err := convertResponsesTools(req.Tools)
+	tools, err := convertResponsesTools(req.Tools)
 	if err != nil {
 		return convertedRequest{}, err
 	}
 	out.Tools = tools
 	out.ToolChoice = convertResponsesToolChoice(req.ToolChoice, len(tools) > 0)
-	return convertedRequest{Request: out, UsesWebSearch: usesSearch}, nil
+	return convertedRequest{Request: out}, nil
 }
 
 func convertResponsesInput(input json.RawMessage) ([]anthropic.Message, []string, error) {
@@ -186,9 +185,8 @@ func responsesContentToAnthropicBlocks(raw json.RawMessage, role string) []anthr
 	return blocks
 }
 
-func convertResponsesTools(rawTools []json.RawMessage) ([]anthropic.Tool, bool, error) {
+func convertResponsesTools(rawTools []json.RawMessage) ([]anthropic.Tool, error) {
 	var tools []anthropic.Tool
-	usesSearch := false
 	for _, raw := range rawTools {
 		var tool map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &tool); err != nil {
@@ -197,11 +195,10 @@ func convertResponsesTools(rawTools []json.RawMessage) ([]anthropic.Tool, bool, 
 		var typ string
 		_ = json.Unmarshal(tool["type"], &typ)
 		if isResponsesSearchTool(typ) {
-			usesSearch = true
 			tools = append(tools, anthropic.Tool{
-				Name:        proxyWebSearchToolName,
-				Description: "Search the web for current information.",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}`),
+				Type:    "web_search_20250305",
+				Name:    proxyWebSearchToolName,
+				MaxUses: 5,
 			})
 			continue
 		}
@@ -220,7 +217,7 @@ func convertResponsesTools(rawTools []json.RawMessage) ([]anthropic.Tool, bool, 
 		}
 		tools = append(tools, anthropic.Tool{Name: name, Description: description, InputSchema: schema})
 	}
-	return tools, usesSearch, nil
+	return tools, nil
 }
 
 func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
@@ -273,6 +270,17 @@ func convertAnthropicToResponses(resp anthropic.Response, model string) openaire
 				Name:      block.Name,
 				Arguments: args,
 			})
+		case "server_tool_use":
+			item := openairesp.OutputItem{
+				ID:     firstNonEmpty(block.ID, randomID("ws_")),
+				Type:   "web_search_call",
+				Status: "completed",
+			}
+			query := searchQueryFromInput(block.Input)
+			if query != "" {
+				item.Action = map[string]any{"type": "search", "query": query}
+			}
+			output = append(output, item)
 		}
 	}
 	usage := (*openairesp.Usage)(nil)
@@ -282,6 +290,14 @@ func convertAnthropicToResponses(resp anthropic.Response, model string) openaire
 		usage = &openairesp.Usage{InputTokens: input, OutputTokens: outputTokens, TotalTokens: input + outputTokens}
 	}
 	return openairesp.NewResponse(firstNonEmpty(resp.ID, randomID("resp_")), firstNonEmpty(model, resp.Model), output, usage)
+}
+
+func searchQueryFromInput(raw json.RawMessage) string {
+	var payload struct {
+		Query string `json:"query"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload.Query
 }
 
 func isResponsesSearchTool(typ string) bool {
