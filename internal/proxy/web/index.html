@@ -56,8 +56,7 @@
       margin: 10px 0 0;
       padding: 12px;
       overflow: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
+      white-space: pre;
       background: var(--code);
       color: #e5edf8;
       border-radius: 6px;
@@ -152,7 +151,6 @@
         config.textContent = [
           'model = "' + model.value.trim() + '"',
           'model_provider = "sandbox0-llmproxy"',
-          'web_search = "disabled"',
           '',
           '[model_providers.sandbox0-llmproxy]',
           'name = "Sandbox0 LLM Proxy"',
