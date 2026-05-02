@@ -17,17 +17,21 @@ The service listens on `:8080` by default. Override with `PORT` or
 
 ## URL Shape
 
-Human-friendly raw URL:
+Configure Codex with this base URL:
 
 ```text
 https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/anthropic/v1
 ```
 
-Codex appends `/responses`, so the request reaches:
+Codex uses the OpenAI Responses API, so it sends requests to
+`{base_url}/responses`. The resulting request path is:
 
 ```text
 POST /claude2codex/https://api.z.ai/anthropic/v1/responses
 ```
+
+Users only need to copy the base URL. The `/responses` suffix is added by
+Codex or any other Responses API client.
 
 ## Environment
 
