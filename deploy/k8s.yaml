@@ -19,14 +19,14 @@ spec:
         app.kubernetes.io/component: proxy
     spec:
       imagePullSecrets:
-        - name: sandbox0-cloud-registry
+        - name: registry-langyishipit
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: llmproxy
-          image: docker.io/sandbox0ai/llmproxy:main
+          image: registry.digitalocean.com/langyishipit/llmproxy:main
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
