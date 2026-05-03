@@ -17,16 +17,16 @@ The service listens on `:8080` by default. Override with `PORT` or
 
 ## URL Shape
 
-Take the provider's Anthropic Messages URL:
+Take the provider's Anthropic-compatible base URL:
 
 ```text
-https://api.z.ai/api/anthropic/v1/messages
+https://api.z.ai/api/anthropic
 ```
 
 Put `https://llmproxy.sandbox0.ai/claude2codex/` in front of it:
 
 ```text
-https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/api/anthropic/v1/messages
+https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/api/anthropic
 ```
 
 The proxy service handles protocol routes only. Hosted marketing pages and
@@ -44,7 +44,7 @@ proxy paths to this service.
 
 Implemented:
 
-- `claude2codex` for Anthropic Messages URLs
+- `claude2codex` for Anthropic-compatible base URLs
 - OpenAI Responses text input to Anthropic Messages
 - Function tool call and tool result conversion
 - OpenAI `web_search` tool to Anthropic `web_search_20250305` server tool conversion

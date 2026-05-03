@@ -36,16 +36,14 @@ func parseClaude2CodexRoute(path string) (targetRoute, error) {
 				return targetRoute{}, errors.New("missing upstream URL")
 			}
 			endpoint, _ := normalizeResponsesEndpoint(suffix)
-			u, err := validateAnthropicMessagesURL(upstream)
+			u, err := normalizeAnthropicMessagesURL(upstream)
 			if err != nil {
 				return targetRoute{}, err
 			}
-			u.RawQuery = ""
-			u.Fragment = ""
 			return targetRoute{AnthropicMessagesURL: u.String(), Endpoint: endpoint}, nil
 		}
 	}
-	return targetRoute{}, errors.New("path must contain an upstream Anthropic Messages URL followed by /responses")
+	return targetRoute{}, errors.New("path must contain an upstream Anthropic base URL followed by /responses")
 }
 
 func normalizeResponsesEndpoint(endpoint string) (string, error) {
@@ -59,13 +57,22 @@ func normalizeResponsesEndpoint(endpoint string) (string, error) {
 	}
 }
 
-func validateAnthropicMessagesURL(upstream string) (*url.URL, error) {
+func normalizeAnthropicMessagesURL(upstream string) (*url.URL, error) {
 	u, err := validateUpstreamURL(upstream)
 	if err != nil {
 		return nil, err
 	}
-	if !strings.HasSuffix(strings.TrimRight(u.EscapedPath(), "/"), "/messages") {
-		return nil, errors.New("upstream URL must be an Anthropic Messages endpoint ending in /messages")
+	u.RawQuery = ""
+	u.Fragment = ""
+
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	switch {
+	case strings.HasSuffix(path, "/messages"):
+		u.Path = strings.TrimRight(u.Path, "/")
+	case strings.HasSuffix(path, "/v1"):
+		u.Path = strings.TrimRight(u.Path, "/") + "/messages"
+	default:
+		u.Path = strings.TrimRight(u.Path, "/") + "/v1/messages"
 	}
 	return u, nil
 }
