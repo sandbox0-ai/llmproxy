@@ -3,7 +3,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,9 +17,6 @@ import (
 
 const maxBodyBytes = 50 * 1024 * 1024
 const maxResponseBytes = 100 * 1024 * 1024
-
-//go:embed web/*
-var embeddedWeb embed.FS
 
 type Config struct {
 }
@@ -39,8 +35,6 @@ func NewHandler(cfg Config) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	switch {
-	case r.URL.Path == "/" && r.Method == http.MethodGet:
-		h.serveLanding(w, r)
 	case r.URL.Path == "/healthz" || r.URL.Path == "/readyz":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))

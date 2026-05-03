@@ -29,6 +29,10 @@ Put `https://llmproxy.sandbox0.ai/claude2codex/` in front of it:
 https://llmproxy.sandbox0.ai/claude2codex/https://api.z.ai/anthropic/v1/messages
 ```
 
+The proxy service handles protocol routes only. Hosted marketing pages and
+public ingress can be managed by a separate website deployment that forwards
+proxy paths to this service.
+
 ## Environment
 
 | Variable | Description |
@@ -46,7 +50,6 @@ Implemented:
 - OpenAI `web_search` tool to Anthropic `web_search_20250305` server tool conversion
 - Anthropic Messages text/tool output to OpenAI Responses
 - SSE response shape for streaming clients
-- Static landing page and config generator at `/`
 - SSRF hardening for dynamic upstream URLs
 
 Planned:
