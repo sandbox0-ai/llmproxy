@@ -283,7 +283,7 @@ func convertAnthropicToResponses(resp anthropic.Response, model string) openaire
 			output = append(output, item)
 		}
 	}
-	usage := (*openairesp.Usage)(nil)
+	usage := &openairesp.Usage{}
 	if resp.Usage != nil {
 		input := resp.Usage.TotalInput()
 		outputTokens := resp.Usage.OutputTokens
