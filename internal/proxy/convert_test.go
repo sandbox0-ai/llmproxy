@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/sandbox0-ai/llmproxy/internal/anthropic"
@@ -82,5 +83,29 @@ func TestConvertAnthropicToResponsesToolUse(t *testing.T) {
 	}
 	if got.Usage.TotalTokens != 15 {
 		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestConvertAnthropicToResponsesKeepsZeroUsageFields(t *testing.T) {
+	resp := anthropic.Response{
+		ID:    "msg_1",
+		Model: "claude-ish",
+		Content: []anthropic.ContentBlock{
+			{Type: "text", Text: "Done."},
+		},
+	}
+	got := convertAnthropicToResponses(resp, "codex-model")
+	if got.Usage == nil {
+		t.Fatal("usage is nil")
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, field := range []string{`"input_tokens":0`, `"output_tokens":0`, `"total_tokens":0`} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("response JSON missing %s: %s", field, body)
+		}
 	}
 }
