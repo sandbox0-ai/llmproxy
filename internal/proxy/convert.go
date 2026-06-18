@@ -9,7 +9,13 @@ import (
 	"github.com/sandbox0-ai/llmproxy/internal/openairesp"
 )
 
-const proxyWebSearchToolName = "web_search"
+const (
+	proxyWebSearchToolName               = "web_search"
+	defaultReasoningThinkingBudgetTokens = 4096
+	lowReasoningThinkingBudgetTokens     = 1024
+	highReasoningThinkingBudgetTokens    = 8192
+	xhighReasoningThinkingBudgetTokens   = 12000
+)
 
 type convertedRequest struct {
 	Request anthropic.Request
@@ -42,6 +48,7 @@ func convertResponsesToAnthropic(req openairesp.Request, upstreamModel string) (
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		out.MaxTokens = *req.MaxOutputTokens
 	}
+	out.Thinking = convertResponsesReasoningToAnthropicThinking(req.Reasoning)
 
 	systemParts := make([]string, 0, 2)
 	if strings.TrimSpace(req.Instructions) != "" {
@@ -307,6 +314,66 @@ func isResponsesSearchTool(typ string) bool {
 	default:
 		return false
 	}
+}
+
+func convertResponsesReasoningToAnthropicThinking(raw json.RawMessage) *anthropic.ThinkingConfig {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var effortString string
+	if json.Unmarshal(raw, &effortString) == nil {
+		return thinkingConfigForReasoningEffort(effortString, 0)
+	}
+	var payload struct {
+		Type               string `json:"type"`
+		Effort             string `json:"effort"`
+		BudgetTokens       int    `json:"budget_tokens"`
+		BudgetTokensCamel  int    `json:"budgetTokens"`
+		MaxReasoningTokens int    `json:"max_reasoning_tokens"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(payload.Type)) {
+	case "disabled":
+		return nil
+	case "enabled", "":
+	default:
+		return nil
+	}
+	return thinkingConfigForReasoningEffort(
+		payload.Effort,
+		firstPositiveInt(payload.BudgetTokens, payload.BudgetTokensCamel, payload.MaxReasoningTokens),
+	)
+}
+
+func thinkingConfigForReasoningEffort(effort string, budget int) *anthropic.ThinkingConfig {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if effort == "none" || effort == "disabled" {
+		return nil
+	}
+	if budget <= 0 {
+		switch effort {
+		case "minimal", "low":
+			budget = lowReasoningThinkingBudgetTokens
+		case "high":
+			budget = highReasoningThinkingBudgetTokens
+		case "xhigh":
+			budget = xhighReasoningThinkingBudgetTokens
+		default:
+			budget = defaultReasoningThinkingBudgetTokens
+		}
+	}
+	return &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: budget}
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func textFromBlocks(blocks []anthropic.ContentBlock) string {

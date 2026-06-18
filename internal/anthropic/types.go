@@ -9,11 +9,17 @@ type Request struct {
 	System        any             `json:"system,omitempty"`
 	Tools         []Tool          `json:"tools,omitempty"`
 	ToolChoice    any             `json:"tool_choice,omitempty"`
+	Thinking      *ThinkingConfig `json:"thinking,omitempty"`
 	Temperature   *float64        `json:"temperature,omitempty"`
 	TopP          *float64        `json:"top_p,omitempty"`
 	Stream        bool            `json:"stream,omitempty"`
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
 	StopSequences []string        `json:"stop_sequences,omitempty"`
+}
+
+type ThinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 type Message struct {

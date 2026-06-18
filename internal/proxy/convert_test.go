@@ -61,6 +61,59 @@ func TestConvertResponsesWebSearchTool(t *testing.T) {
 	}
 }
 
+func TestConvertResponsesReasoningToAnthropicThinking(t *testing.T) {
+	req := openairesp.Request{
+		Model:     "reasoning-model",
+		Input:     json.RawMessage(`"hi"`),
+		Reasoning: json.RawMessage(`{"effort":"low"}`),
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got.Request.Thinking == nil {
+		t.Fatal("thinking config is nil")
+	}
+	if got.Request.Thinking.Type != "enabled" {
+		t.Fatalf("thinking type = %q", got.Request.Thinking.Type)
+	}
+	if got.Request.Thinking.BudgetTokens != lowReasoningThinkingBudgetTokens {
+		t.Fatalf("thinking budget = %d", got.Request.Thinking.BudgetTokens)
+	}
+}
+
+func TestConvertResponsesReasoningAcceptsExplicitThinkingBudget(t *testing.T) {
+	req := openairesp.Request{
+		Model:     "reasoning-model",
+		Input:     json.RawMessage(`"hi"`),
+		Reasoning: json.RawMessage(`{"type":"enabled","budget_tokens":2048}`),
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got.Request.Thinking == nil {
+		t.Fatal("thinking config is nil")
+	}
+	if got.Request.Thinking.BudgetTokens != 2048 {
+		t.Fatalf("thinking budget = %d", got.Request.Thinking.BudgetTokens)
+	}
+}
+
+func TestConvertResponsesDoesNotEnableThinkingWithoutReasoning(t *testing.T) {
+	req := openairesp.Request{
+		Model: "kimi-k2.7-code",
+		Input: json.RawMessage(`"hi"`),
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got.Request.Thinking != nil {
+		t.Fatalf("thinking config = %#v", got.Request.Thinking)
+	}
+}
+
 func TestConvertAnthropicToResponsesToolUse(t *testing.T) {
 	resp := anthropic.Response{
 		ID:    "msg_1",
