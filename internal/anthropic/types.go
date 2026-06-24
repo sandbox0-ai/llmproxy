@@ -30,14 +30,32 @@ type ContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   any             `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Citations []Citation      `json:"citations,omitempty"`
+}
+
+type Citation struct {
+	Type           string `json:"type,omitempty"`
+	URL            string `json:"url,omitempty"`
+	Title          string `json:"title,omitempty"`
+	CitedText      string `json:"cited_text,omitempty"`
+	EncryptedIndex string `json:"encrypted_index,omitempty"`
+	DocumentIndex  *int   `json:"document_index,omitempty"`
+	DocumentTitle  string `json:"document_title,omitempty"`
 }
 
 type Tool struct {
-	Type        string          `json:"type,omitempty"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema,omitempty"`
-	MaxUses     int             `json:"max_uses,omitempty"`
+	Type              string          `json:"type,omitempty"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description,omitempty"`
+	InputSchema       json.RawMessage `json:"input_schema,omitempty"`
+	MaxUses           int             `json:"max_uses,omitempty"`
+	AllowedDomains    []string        `json:"allowed_domains,omitempty"`
+	BlockedDomains    []string        `json:"blocked_domains,omitempty"`
+	UserLocation      json.RawMessage `json:"user_location,omitempty"`
+	ResponseInclusion string          `json:"response_inclusion,omitempty"`
+	MaxContentTokens  int             `json:"max_content_tokens,omitempty"`
+	Citations         json.RawMessage `json:"citations,omitempty"`
+	UseCache          *bool           `json:"use_cache,omitempty"`
 }
 
 type Response struct {
@@ -52,10 +70,11 @@ type Response struct {
 }
 
 type Usage struct {
-	InputTokens              int `json:"input_tokens,omitempty"`
-	OutputTokens             int `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens              int            `json:"input_tokens,omitempty"`
+	OutputTokens             int            `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
+	ServerToolUse            map[string]int `json:"server_tool_use,omitempty"`
 }
 
 func (u *Usage) TotalInput() int {

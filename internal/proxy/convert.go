@@ -4,12 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/sandbox0-ai/llmproxy/internal/anthropic"
 	"github.com/sandbox0-ai/llmproxy/internal/openairesp"
 )
 
-const proxyWebSearchToolName = "web_search"
+const (
+	proxyWebSearchToolName      = "web_search"
+	proxyWebFetchToolName       = "web_fetch"
+	anthropicWebSearchToolType  = "web_search_20260318"
+	anthropicWebFetchToolType   = "web_fetch_20260318"
+	defaultHostedWebToolMaxUses = 5
+)
 
 type convertedRequest struct {
 	Request anthropic.Request
@@ -142,6 +149,7 @@ func convertResponsesInput(input json.RawMessage) ([]anthropic.Message, []string
 				}},
 			})
 		case item.Type == "reasoning" || item.Type == "compaction" || item.Type == "web_search_call" ||
+			item.Type == "web_fetch_call" ||
 			item.Type == "tool_search_call" || item.Type == "tool_search_output" || item.Type == "mcp_list_tools":
 			continue
 		}
@@ -206,6 +214,17 @@ type responseToolName struct {
 func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
 	var out convertedTools
 	out.Names = make(responseToolNameMap)
+	hostedToolIndexes := make(map[string]int)
+	appendHostedTool := func(tool anthropic.Tool, replace bool) {
+		if idx, ok := hostedToolIndexes[tool.Name]; ok {
+			if replace {
+				out.Tools[idx] = tool
+			}
+			return
+		}
+		hostedToolIndexes[tool.Name] = len(out.Tools)
+		out.Tools = append(out.Tools, tool)
+	}
 	for _, raw := range rawTools {
 		var tool map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &tool); err != nil {
@@ -214,11 +233,11 @@ func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
 		var typ string
 		_ = json.Unmarshal(tool["type"], &typ)
 		if isResponsesSearchTool(typ) {
-			out.Tools = append(out.Tools, anthropic.Tool{
-				Type:    "web_search_20250305",
-				Name:    proxyWebSearchToolName,
-				MaxUses: 5,
-			})
+			appendHostedTool(convertResponsesWebSearchTool(tool), true)
+			continue
+		}
+		if isResponsesFetchTool(typ) {
+			appendHostedTool(convertResponsesWebFetchTool(tool), true)
 			continue
 		}
 		if typ == "namespace" {
@@ -262,6 +281,51 @@ func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
 	return out, nil
 }
 
+func convertResponsesWebSearchTool(tool map[string]json.RawMessage) anthropic.Tool {
+	out := anthropic.Tool{
+		Type:    anthropicWebSearchToolType,
+		Name:    proxyWebSearchToolName,
+		MaxUses: hostedWebToolMaxUses(tool),
+	}
+	applyHostedWebDomains(&out, tool)
+	out.UserLocation = rawJSONOption(tool["user_location"])
+	out.ResponseInclusion = stringFromRaw(tool["response_inclusion"])
+	return out
+}
+
+func convertResponsesWebFetchTool(tool map[string]json.RawMessage) anthropic.Tool {
+	out := anthropic.Tool{
+		Type:    anthropicWebFetchToolType,
+		Name:    proxyWebFetchToolName,
+		MaxUses: hostedWebToolMaxUses(tool),
+	}
+	applyHostedWebDomains(&out, tool)
+	out.Citations = rawJSONOption(tool["citations"])
+	out.MaxContentTokens = intFromRaw(tool["max_content_tokens"])
+	out.ResponseInclusion = stringFromRaw(tool["response_inclusion"])
+	out.UseCache = boolPtrFromRaw(tool["use_cache"])
+	return out
+}
+
+func applyHostedWebDomains(out *anthropic.Tool, tool map[string]json.RawMessage) {
+	allowed := stringSliceFromRaw(tool["allowed_domains"])
+	blocked := stringSliceFromRaw(tool["blocked_domains"])
+	var filters struct {
+		AllowedDomains []string `json:"allowed_domains"`
+		BlockedDomains []string `json:"blocked_domains"`
+	}
+	if raw := rawJSONOption(tool["filters"]); len(raw) > 0 && json.Unmarshal(raw, &filters) == nil {
+		if len(filters.AllowedDomains) > 0 {
+			allowed = cleanStringSlice(filters.AllowedDomains)
+		}
+		if len(filters.BlockedDomains) > 0 {
+			blocked = cleanStringSlice(filters.BlockedDomains)
+		}
+	}
+	out.AllowedDomains = allowed
+	out.BlockedDomains = blocked
+}
+
 func convertResponsesFunctionTool(tool map[string]json.RawMessage, namespaceDescription string) (anthropic.Tool, bool) {
 	var typ string
 	_ = json.Unmarshal(tool["type"], &typ)
@@ -293,6 +357,8 @@ func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
 		switch s {
 		case "auto", "any", "none":
 			return map[string]any{"type": s}
+		case "required":
+			return map[string]any{"type": "any"}
 		}
 	}
 	var m map[string]any
@@ -301,6 +367,10 @@ func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
 			if name, _ := m["name"].(string); name != "" {
 				return map[string]any{"type": "tool", "name": name}
 			}
+		} else if isResponsesSearchTool(typ) {
+			return map[string]any{"type": "tool", "name": proxyWebSearchToolName}
+		} else if isResponsesFetchTool(typ) {
+			return map[string]any{"type": "tool", "name": proxyWebFetchToolName}
 		}
 	}
 	return nil
@@ -308,6 +378,7 @@ func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
 
 func convertAnthropicToResponses(resp anthropic.Response, model string, toolNames responseToolNameMap) openairesp.Response {
 	output := make([]openairesp.OutputItem, 0, len(resp.Content))
+	fetchDocuments := make([]fetchedDocument, 0)
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
@@ -315,11 +386,15 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 				continue
 			}
 			output = append(output, openairesp.OutputItem{
-				ID:      randomID("msg_"),
-				Type:    "message",
-				Status:  "completed",
-				Role:    "assistant",
-				Content: []openairesp.ContentPart{{Type: "output_text", Text: block.Text, Annotations: []any{}}},
+				ID:     randomID("msg_"),
+				Type:   "message",
+				Status: "completed",
+				Role:   "assistant",
+				Content: []openairesp.ContentPart{{
+					Type:        "output_text",
+					Text:        block.Text,
+					Annotations: citationsToOpenAIAnnotations(block.Text, block.Citations, fetchDocuments),
+				}},
 			})
 		case "tool_use":
 			args := "{}"
@@ -336,16 +411,15 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 				Arguments: args,
 			})
 		case "server_tool_use":
-			item := openairesp.OutputItem{
-				ID:     firstNonEmpty(block.ID, randomID("ws_")),
-				Type:   "web_search_call",
-				Status: "completed",
+			item, ok := convertServerToolUseToResponses(block)
+			if ok {
+				output = append(output, item)
 			}
-			query := searchQueryFromInput(block.Input)
-			if query != "" {
-				item.Action = map[string]any{"type": "search", "query": query}
-			}
-			output = append(output, item)
+		case "web_fetch_tool_result":
+			fetchDocuments = appendFetchDocuments(fetchDocuments, block.Content)
+			continue
+		case "web_search_tool_result":
+			continue
 		}
 	}
 	usage := &openairesp.Usage{}
@@ -355,6 +429,33 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 		usage = &openairesp.Usage{InputTokens: input, OutputTokens: outputTokens, TotalTokens: input + outputTokens}
 	}
 	return openairesp.NewResponse(firstNonEmpty(resp.ID, randomID("resp_")), firstNonEmpty(model, resp.Model), output, usage)
+}
+
+func convertServerToolUseToResponses(block anthropic.ContentBlock) (openairesp.OutputItem, bool) {
+	switch block.Name {
+	case proxyWebSearchToolName:
+		item := openairesp.OutputItem{
+			ID:     firstNonEmpty(block.ID, randomID("ws_")),
+			Type:   "web_search_call",
+			Status: "completed",
+		}
+		if query := stringFieldFromJSON(block.Input, "query"); query != "" {
+			item.Action = map[string]any{"type": "search", "query": query}
+		}
+		return item, true
+	case proxyWebFetchToolName:
+		item := openairesp.OutputItem{
+			ID:     firstNonEmpty(block.ID, randomID("ws_")),
+			Type:   "web_search_call",
+			Status: "completed",
+		}
+		if url := stringFieldFromJSON(block.Input, "url"); url != "" {
+			item.Action = map[string]any{"type": "open_page", "url": url}
+		}
+		return item, true
+	default:
+		return openairesp.OutputItem{}, false
+	}
 }
 
 func anthropicToolName(namespace, name string) string {
@@ -388,12 +489,20 @@ func responseToolNameOnly(name string, toolNames responseToolNameMap) string {
 	return name
 }
 
-func searchQueryFromInput(raw json.RawMessage) string {
+func stringFieldFromJSON(raw json.RawMessage, field string) string {
 	var payload struct {
 		Query string `json:"query"`
+		URL   string `json:"url"`
 	}
 	_ = json.Unmarshal(raw, &payload)
-	return payload.Query
+	switch field {
+	case "query":
+		return payload.Query
+	case "url":
+		return payload.URL
+	default:
+		return ""
+	}
 }
 
 func isResponsesSearchTool(typ string) bool {
@@ -403,6 +512,179 @@ func isResponsesSearchTool(typ string) bool {
 	default:
 		return false
 	}
+}
+
+func isResponsesFetchTool(typ string) bool {
+	switch typ {
+	case "web_fetch", "web_fetch_preview":
+		return true
+	default:
+		return false
+	}
+}
+
+type fetchedDocument struct {
+	URL   string
+	Title string
+}
+
+func appendFetchDocuments(docs []fetchedDocument, content any) []fetchedDocument {
+	switch value := content.(type) {
+	case []any:
+		for _, item := range value {
+			if doc, ok := fetchedDocumentFromAny(item); ok {
+				docs = append(docs, doc)
+			}
+		}
+	case map[string]any:
+		if doc, ok := fetchedDocumentFromMap(value); ok {
+			docs = append(docs, doc)
+		}
+	}
+	return docs
+}
+
+func fetchedDocumentFromAny(value any) (fetchedDocument, bool) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return fetchedDocument{}, false
+	}
+	return fetchedDocumentFromMap(m)
+}
+
+func fetchedDocumentFromMap(value map[string]any) (fetchedDocument, bool) {
+	url := stringFromAny(value["url"])
+	title := stringFromAny(value["title"])
+	if content, ok := value["content"].(map[string]any); ok && title == "" {
+		title = stringFromAny(content["title"])
+	}
+	if url == "" {
+		return fetchedDocument{}, false
+	}
+	return fetchedDocument{URL: url, Title: title}, true
+}
+
+func citationsToOpenAIAnnotations(text string, citations []anthropic.Citation, fetchDocuments []fetchedDocument) []any {
+	annotations := make([]any, 0, len(citations))
+	for _, citation := range citations {
+		url, title := citationURLAndTitle(citation, fetchDocuments)
+		if strings.TrimSpace(url) == "" {
+			continue
+		}
+		start, end := citationSpan(text, citation.CitedText)
+		annotation := map[string]any{
+			"type":        "url_citation",
+			"start_index": start,
+			"end_index":   end,
+			"url":         url,
+			"title":       title,
+		}
+		annotations = append(annotations, annotation)
+	}
+	if annotations == nil {
+		return []any{}
+	}
+	return annotations
+}
+
+func citationURLAndTitle(citation anthropic.Citation, fetchDocuments []fetchedDocument) (string, string) {
+	url := citation.URL
+	title := firstNonEmpty(citation.Title, citation.DocumentTitle)
+	if url == "" && citation.DocumentIndex != nil {
+		idx := *citation.DocumentIndex
+		if idx >= 0 && idx < len(fetchDocuments) {
+			doc := fetchDocuments[idx]
+			url = doc.URL
+			title = firstNonEmpty(title, doc.Title)
+		}
+	}
+	return url, title
+}
+
+func citationSpan(text, citedText string) (int, int) {
+	textLen := utf8.RuneCountInString(text)
+	if textLen == 0 {
+		return 0, 0
+	}
+	if strings.TrimSpace(citedText) == "" {
+		return 0, textLen
+	}
+	idx := strings.Index(text, citedText)
+	if idx < 0 {
+		return 0, textLen
+	}
+	start := utf8.RuneCountInString(text[:idx])
+	return start, start + utf8.RuneCountInString(citedText)
+}
+
+func hostedWebToolMaxUses(tool map[string]json.RawMessage) int {
+	for _, key := range []string{"max_uses", "max_tool_calls"} {
+		if value := intFromRaw(tool[key]); value > 0 {
+			return value
+		}
+	}
+	return defaultHostedWebToolMaxUses
+}
+
+func intFromRaw(raw json.RawMessage) int {
+	var value int
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return 0
+	}
+	return value
+}
+
+func stringFromRaw(raw json.RawMessage) string {
+	var value string
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
+}
+
+func boolPtrFromRaw(raw json.RawMessage) *bool {
+	var value bool
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return &value
+}
+
+func stringFromAny(value any) string {
+	s, _ := value.(string)
+	return s
+}
+
+func stringSliceFromRaw(raw json.RawMessage) []string {
+	var values []string
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return nil
+	}
+	return cleanStringSlice(values)
+}
+
+func cleanStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func rawJSONOption(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	out := make(json.RawMessage, len(raw))
+	copy(out, raw)
+	return out
 }
 
 func textFromBlocks(blocks []anthropic.ContentBlock) string {
