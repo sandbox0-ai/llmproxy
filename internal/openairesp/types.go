@@ -45,6 +45,7 @@ type OutputItem struct {
 	Role      string        `json:"role,omitempty"`
 	Content   []ContentPart `json:"content,omitempty"`
 	CallID    string        `json:"call_id,omitempty"`
+	Namespace string        `json:"namespace,omitempty"`
 	Name      string        `json:"name,omitempty"`
 	Arguments string        `json:"arguments,omitempty"`
 	Action    any           `json:"action,omitempty"`

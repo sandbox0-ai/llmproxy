@@ -93,7 +93,7 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	out := convertAnthropicToResponses(resp, req.Model)
+	out := convertAnthropicToResponses(resp, req.Model, converted.Tools)
 	if req.Stream {
 		streamFinalResponse(w, out)
 		return
