@@ -47,7 +47,9 @@ Implemented:
 - `claude2codex` for Anthropic-compatible base URLs
 - OpenAI Responses text input to Anthropic Messages
 - Function tool call and tool result conversion
-- OpenAI `web_search` tool to Anthropic `web_search_20250305` server tool conversion
+- OpenAI `web_search` tool to Anthropic `web_search_20260318` server tool conversion
+- OpenAI-compatible `web_fetch` tool extension to Anthropic `web_fetch_20260318`
+- Anthropic hosted web search/fetch calls and citations back to OpenAI Responses web call/annotation shapes
 - Anthropic Messages text/tool output to OpenAI Responses
 - SSE response shape for streaming clients
 - SSRF hardening for dynamic upstream URLs

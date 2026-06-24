@@ -145,7 +145,7 @@ func streamFinalResponse(w http.ResponseWriter, resp openairesp.Response) {
 					"sequence_number": seq,
 					"output_index":    outputIndex,
 					"content_index":   contentIndex,
-					"part":            map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+					"part":            map[string]any{"type": "output_text", "text": "", "annotations": part.Annotations},
 				})
 				if part.Text != "" {
 					send("response.output_text.delta", map[string]any{

@@ -47,17 +47,89 @@ func TestConvertResponsesWebSearchTool(t *testing.T) {
 	req := openairesp.Request{
 		Model: "test-model",
 		Input: json.RawMessage(`"what is current news?"`),
-		Tools: []json.RawMessage{json.RawMessage(`{"type":"web_search_preview"}`)},
+		Tools: []json.RawMessage{json.RawMessage(`{
+			"type":"web_search",
+			"max_uses":3,
+			"filters":{"allowed_domains":["docs.example.com"],"blocked_domains":["blocked.example.com"]},
+			"user_location":{"type":"approximate","city":"San Francisco"},
+			"response_inclusion":"excluded"
+		}`)},
 	}
 	got, err := convertResponsesToAnthropic(req, "")
 	if err != nil {
 		t.Fatalf("convert: %v", err)
 	}
-	if len(got.Request.Tools) != 1 || got.Request.Tools[0].Name != proxyWebSearchToolName {
+	if len(got.Request.Tools) != 1 {
 		t.Fatalf("tools = %#v", got.Request.Tools)
 	}
-	if got.Request.Tools[0].Type != "web_search_20250305" {
-		t.Fatalf("tool type = %q", got.Request.Tools[0].Type)
+	searchTool := got.Request.Tools[0]
+	if searchTool.Name != proxyWebSearchToolName || searchTool.Type != anthropicWebSearchToolType {
+		t.Fatalf("search tool = %#v", searchTool)
+	}
+	if searchTool.MaxUses != 3 || searchTool.ResponseInclusion != "excluded" {
+		t.Fatalf("search tool options = %#v", searchTool)
+	}
+	if string(searchTool.UserLocation) != `{"type":"approximate","city":"San Francisco"}` {
+		t.Fatalf("user location = %s", searchTool.UserLocation)
+	}
+	if len(searchTool.AllowedDomains) != 1 || searchTool.AllowedDomains[0] != "docs.example.com" {
+		t.Fatalf("allowed domains = %#v", searchTool.AllowedDomains)
+	}
+	if len(searchTool.BlockedDomains) != 1 || searchTool.BlockedDomains[0] != "blocked.example.com" {
+		t.Fatalf("blocked domains = %#v", searchTool.BlockedDomains)
+	}
+}
+
+func TestConvertResponsesWebFetchTool(t *testing.T) {
+	req := openairesp.Request{
+		Model: "test-model",
+		Input: json.RawMessage(`"read this url"`),
+		Tools: []json.RawMessage{json.RawMessage(`{
+			"type":"web_fetch",
+			"max_uses":2,
+			"allowed_domains":["example.com"],
+			"max_content_tokens":2048,
+			"citations":{"enabled":true},
+			"response_inclusion":"excluded",
+			"use_cache":false
+		}`)},
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if len(got.Request.Tools) != 1 {
+		t.Fatalf("tools = %#v", got.Request.Tools)
+	}
+	tool := got.Request.Tools[0]
+	if tool.Name != proxyWebFetchToolName || tool.Type != anthropicWebFetchToolType {
+		t.Fatalf("tool = %#v", tool)
+	}
+	if tool.MaxUses != 2 || tool.MaxContentTokens != 2048 {
+		t.Fatalf("tool options = %#v", tool)
+	}
+	if tool.ResponseInclusion != "excluded" {
+		t.Fatalf("response inclusion = %q", tool.ResponseInclusion)
+	}
+	if tool.UseCache == nil || *tool.UseCache {
+		t.Fatalf("use cache = %#v", tool.UseCache)
+	}
+	if len(tool.AllowedDomains) != 1 || tool.AllowedDomains[0] != "example.com" {
+		t.Fatalf("allowed domains = %#v", tool.AllowedDomains)
+	}
+	if string(tool.Citations) != `{"enabled":true}` {
+		t.Fatalf("citations = %s", tool.Citations)
+	}
+}
+
+func TestConvertResponsesHostedWebToolChoice(t *testing.T) {
+	got := convertResponsesToolChoice(json.RawMessage(`"required"`), true)
+	if choice, ok := got.(map[string]any); !ok || choice["type"] != "any" {
+		t.Fatalf("required choice = %#v", got)
+	}
+	got = convertResponsesToolChoice(json.RawMessage(`{"type":"web_fetch"}`), true)
+	if choice, ok := got.(map[string]any); !ok || choice["type"] != "tool" || choice["name"] != proxyWebFetchToolName {
+		t.Fatalf("web fetch choice = %#v", got)
 	}
 }
 
@@ -148,6 +220,123 @@ func TestConvertAnthropicToResponsesNamespaceToolUse(t *testing.T) {
 		got.Output[0].Name != "echo" ||
 		got.Output[0].Arguments != `{"text":"ok"}` {
 		t.Fatalf("function call = %#v", got.Output[0])
+	}
+}
+
+func TestConvertAnthropicToResponsesHostedWebTools(t *testing.T) {
+	resp := anthropic.Response{
+		ID:    "msg_1",
+		Model: "claude-ish",
+		Content: []anthropic.ContentBlock{
+			{Type: "server_tool_use", ID: "srv_1", Name: proxyWebSearchToolName, Input: json.RawMessage(`{"query":"sandbox0"}`)},
+			{Type: "server_tool_use", ID: "srv_2", Name: proxyWebFetchToolName, Input: json.RawMessage(`{"url":"https://sandbox0.ai/docs"}`)},
+			{
+				Type: "text",
+				Text: "Sandbox0 docs explain managed agents.",
+				Citations: []anthropic.Citation{{
+					Type:      "web_search_result_location",
+					URL:       "https://sandbox0.ai/docs",
+					Title:     "Sandbox0 docs",
+					CitedText: "Sandbox0 docs",
+				}},
+			},
+		},
+	}
+	got := convertAnthropicToResponses(resp, "codex-model", nil)
+	if len(got.Output) != 3 {
+		t.Fatalf("output len = %d", len(got.Output))
+	}
+	searchCall := got.Output[0]
+	if searchCall.Type != "web_search_call" || searchCall.ID != "srv_1" {
+		t.Fatalf("search call = %#v", searchCall)
+	}
+	searchAction, ok := searchCall.Action.(map[string]any)
+	if !ok || searchAction["type"] != "search" || searchAction["query"] != "sandbox0" {
+		t.Fatalf("search action = %#v", searchCall.Action)
+	}
+	fetchCall := got.Output[1]
+	if fetchCall.Type != "web_search_call" || fetchCall.ID != "srv_2" {
+		t.Fatalf("fetch call = %#v", fetchCall)
+	}
+	fetchAction, ok := fetchCall.Action.(map[string]any)
+	if !ok || fetchAction["type"] != "open_page" || fetchAction["url"] != "https://sandbox0.ai/docs" {
+		t.Fatalf("fetch action = %#v", fetchCall.Action)
+	}
+	annotations := got.Output[2].Content[0].Annotations
+	if len(annotations) != 1 {
+		t.Fatalf("annotations = %#v", annotations)
+	}
+	citation, ok := annotations[0].(map[string]any)
+	if !ok ||
+		citation["type"] != "url_citation" ||
+		citation["url"] != "https://sandbox0.ai/docs" ||
+		citation["title"] != "Sandbox0 docs" ||
+		citation["start_index"] != 0 ||
+		citation["end_index"] != 13 {
+		t.Fatalf("citation = %#v", annotations[0])
+	}
+}
+
+func TestConvertAnthropicToResponsesWebFetchCitationUsesFetchedURL(t *testing.T) {
+	documentIndex := 0
+	resp := anthropic.Response{
+		ID:    "msg_1",
+		Model: "claude-ish",
+		Content: []anthropic.ContentBlock{
+			{Type: "server_tool_use", ID: "srv_1", Name: proxyWebFetchToolName, Input: json.RawMessage(`{"url":"https://example.com/article"}`)},
+			{
+				Type:      "web_fetch_tool_result",
+				ToolUseID: "srv_1",
+				Content: map[string]any{
+					"type": "web_fetch_result",
+					"url":  "https://example.com/article",
+					"content": map[string]any{
+						"type":  "document",
+						"title": "Article Title",
+					},
+				},
+			},
+			{
+				Type: "text",
+				Text: "The article says AI will transform healthcare.",
+				Citations: []anthropic.Citation{{
+					Type:          "char_location",
+					DocumentIndex: &documentIndex,
+					DocumentTitle: "Article Title",
+					CitedText:     "AI will transform healthcare",
+				}},
+			},
+		},
+	}
+	got := convertAnthropicToResponses(resp, "codex-model", nil)
+	if len(got.Output) != 2 {
+		t.Fatalf("output len = %d", len(got.Output))
+	}
+	annotations := got.Output[1].Content[0].Annotations
+	if len(annotations) != 1 {
+		t.Fatalf("annotations = %#v", annotations)
+	}
+	citation, ok := annotations[0].(map[string]any)
+	if !ok ||
+		citation["url"] != "https://example.com/article" ||
+		citation["title"] != "Article Title" ||
+		citation["start_index"] != 17 ||
+		citation["end_index"] != 45 {
+		t.Fatalf("citation = %#v", annotations[0])
+	}
+}
+
+func TestConvertAnthropicToResponsesIgnoresUnknownServerToolUse(t *testing.T) {
+	resp := anthropic.Response{
+		ID:    "msg_1",
+		Model: "claude-ish",
+		Content: []anthropic.ContentBlock{
+			{Type: "server_tool_use", ID: "srv_1", Name: "code_execution", Input: json.RawMessage(`{"code":"print(1)"}`)},
+		},
+	}
+	got := convertAnthropicToResponses(resp, "codex-model", nil)
+	if len(got.Output) != 0 {
+		t.Fatalf("output = %#v", got.Output)
 	}
 }
 
