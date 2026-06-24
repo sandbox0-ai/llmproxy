@@ -106,8 +106,8 @@ func readAnthropicStream(r io.Reader) (anthropic.Response, error) {
 	return out, nil
 }
 
-func (h *Handler) streamAnthropicToResponses(w http.ResponseWriter, model string, resp anthropic.Response) {
-	streamFinalResponse(w, convertAnthropicToResponses(resp, model))
+func (h *Handler) streamAnthropicToResponses(w http.ResponseWriter, model string, resp anthropic.Response, toolNames responseToolNameMap) {
+	streamFinalResponse(w, convertAnthropicToResponses(resp, model, toolNames))
 }
 
 func streamFinalResponse(w http.ResponseWriter, resp openairesp.Response) {
