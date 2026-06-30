@@ -171,8 +171,97 @@ func TestConvertResponsesNamespaceTool(t *testing.T) {
 	if toolUse.Name != "mcp__contract__echo" || string(toolUse.Input) != `{"text":"ok"}` {
 		t.Fatalf("tool use = %#v", toolUse)
 	}
-	if got.Tools["mcp__contract__echo"] != (responseToolName{Namespace: "mcp__contract", Name: "echo"}) {
+	if got.Tools["mcp__contract__echo"] != (responseToolName{Namespace: "mcp__contract", Name: "echo", Kind: responseToolKindNamespace}) {
 		t.Fatalf("tool map = %#v", got.Tools)
+	}
+}
+
+func TestConvertResponsesToAnthropicMediaStopMetadataAndCustomTool(t *testing.T) {
+	req := openairesp.Request{
+		Model:     "test-model",
+		MaxTokens: intPtr(1234),
+		Stop:      json.RawMessage(`["END"]`),
+		Metadata:  json.RawMessage(`{"session":"abc"}`),
+		Input: json.RawMessage(`[
+			{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,abc123"},{"type":"input_file","file_url":"https://example.com/report.pdf","media_type":"application/pdf"}]},
+			{"type":"custom_tool_call","call_id":"call_custom","name":"write_note","input":"{\"looks\":\"json\"}"}
+		]`),
+		Tools:             []json.RawMessage{json.RawMessage(`{"type":"custom","name":"write_note","description":"Write a note"}`)},
+		ToolChoice:        json.RawMessage(`{"type":"custom","name":"write_note"}`),
+		ParallelToolCalls: boolPtr(false),
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got.Request.MaxTokens != 1234 {
+		t.Fatalf("max tokens = %d", got.Request.MaxTokens)
+	}
+	if len(got.Request.StopSequences) != 1 || got.Request.StopSequences[0] != "END" {
+		t.Fatalf("stop = %#v", got.Request.StopSequences)
+	}
+	if string(got.Request.Metadata) != `{"session":"abc"}` {
+		t.Fatalf("metadata = %s", got.Request.Metadata)
+	}
+	blocks := got.Request.Messages[0].Content
+	if len(blocks) != 3 {
+		t.Fatalf("blocks = %#v", blocks)
+	}
+	if blocks[1].Type != "image" || !strings.Contains(string(blocks[1].Source), `"type":"base64"`) {
+		t.Fatalf("image block = %#v", blocks[1])
+	}
+	if blocks[2].Type != "document" || !strings.Contains(string(blocks[2].Source), `"url":"https://example.com/report.pdf"`) {
+		t.Fatalf("document block = %#v", blocks[2])
+	}
+	if len(got.Request.Tools) != 1 || got.Request.Tools[0].Name != "write_note" {
+		t.Fatalf("tools = %#v", got.Request.Tools)
+	}
+	toolUse := got.Request.Messages[1].Content[0]
+	if toolUse.Type != "tool_use" || string(toolUse.Input) != `{"input":"{\"looks\":\"json\"}"}` {
+		t.Fatalf("custom tool input = %#v", toolUse)
+	}
+	choice, ok := got.Request.ToolChoice.(map[string]any)
+	if !ok || choice["type"] != "tool" || choice["name"] != "write_note" {
+		t.Fatalf("tool choice = %#v", got.Request.ToolChoice)
+	}
+}
+
+func TestConvertAnthropicToResponsesReasoningCustomToolAndIncompleteUsage(t *testing.T) {
+	resp := anthropic.Response{
+		ID:         "msg_1",
+		Model:      "claude-ish",
+		StopReason: "max_tokens",
+		Content: []anthropic.ContentBlock{
+			{Type: "thinking", Thinking: "Need a note."},
+			{Type: "tool_use", ID: "toolu_1", Name: "write_note", Input: json.RawMessage(`{"input":"raw note"}`)},
+		},
+		Usage: &anthropic.Usage{
+			InputTokens:              10,
+			OutputTokens:             5,
+			CacheReadInputTokens:     3,
+			CacheCreationInputTokens: 2,
+		},
+	}
+	got := convertAnthropicToResponses(resp, "codex-model", responseToolNameMap{
+		"write_note": {Name: "write_note", Kind: responseToolKindCustom},
+	})
+	if got.Status != "incomplete" || got.IncompleteDetails == nil || got.IncompleteDetails.Reason != "max_output_tokens" {
+		t.Fatalf("status = %#v incomplete = %#v", got.Status, got.IncompleteDetails)
+	}
+	if len(got.Output) != 2 {
+		t.Fatalf("output len = %d", len(got.Output))
+	}
+	if got.Output[0].Type != "reasoning" || got.Output[0].Summary[0].Text != "Need a note." {
+		t.Fatalf("reasoning = %#v", got.Output[0])
+	}
+	if got.Output[1].Type != "custom_tool_call" || got.Output[1].Input != "raw note" {
+		t.Fatalf("custom tool = %#v", got.Output[1])
+	}
+	if got.Usage.InputTokens != 15 || got.Usage.TotalTokens != 20 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+	if got.Usage.InputTokensDetails == nil || got.Usage.InputTokensDetails.CachedTokens != 3 {
+		t.Fatalf("input details = %#v", got.Usage.InputTokensDetails)
 	}
 }
 
@@ -199,6 +288,14 @@ func TestConvertAnthropicToResponsesToolUse(t *testing.T) {
 	if got.Usage.TotalTokens != 15 {
 		t.Fatalf("usage = %#v", got.Usage)
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func TestConvertAnthropicToResponsesNamespaceToolUse(t *testing.T) {

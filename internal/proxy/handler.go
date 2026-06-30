@@ -87,6 +87,13 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
+	if req.Stream {
+		if err := h.streamClaude2Codex(ctx, w, r, upstreamURL, converted.Request, req.Model, converted.Tools); err != nil {
+			slog.Warn("claude2codex streaming upstream failed", "upstream", upstreamURL, "error", err)
+		}
+		return
+	}
+
 	resp, err := h.callAnthropic(ctx, r, upstreamURL, converted.Request, req.Stream)
 	if err != nil {
 		slog.Warn("claude2codex upstream failed", "upstream", upstreamURL, "error", err)
@@ -94,32 +101,14 @@ func (h *Handler) handleClaude2Codex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := convertAnthropicToResponses(resp, req.Model, converted.Tools)
-	if req.Stream {
-		streamFinalResponse(w, out)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (h *Handler) callAnthropic(ctx context.Context, original *http.Request, upstreamURL string, req anthropic.Request, stream bool) (anthropic.Response, error) {
-	req.Stream = stream
-	body, err := json.Marshal(req)
+	upReq, err := newAnthropicRequest(ctx, original, upstreamURL, req, stream)
 	if err != nil {
 		return anthropic.Response{}, err
-	}
-	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
-	if err != nil {
-		return anthropic.Response{}, err
-	}
-	upReq.Header.Set("Content-Type", "application/json")
-	upReq.Header.Set("Anthropic-Version", firstNonEmpty(original.Header.Get("Anthropic-Version"), "2023-06-01"))
-	if beta := original.Header.Get("Anthropic-Beta"); beta != "" {
-		upReq.Header.Set("Anthropic-Beta", beta)
-	}
-	copyAuthToAnthropic(upReq.Header, original.Header)
-	if req.Stream {
-		upReq.Header.Set("Accept", "text/event-stream")
 	}
 	resp, err := h.client.Do(upReq)
 	if err != nil {
@@ -131,9 +120,6 @@ func (h *Handler) callAnthropic(ctx context.Context, original *http.Request, ups
 		slog.Warn("anthropic upstream error", "status", resp.StatusCode, "body", string(raw))
 		return anthropic.Response{}, fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
 	}
-	if req.Stream {
-		return readAnthropicStream(resp.Body)
-	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return anthropic.Response{}, err
@@ -143,6 +129,50 @@ func (h *Handler) callAnthropic(ctx context.Context, original *http.Request, ups
 		return anthropic.Response{}, fmt.Errorf("invalid upstream response")
 	}
 	return out, nil
+}
+
+func (h *Handler) streamClaude2Codex(ctx context.Context, w http.ResponseWriter, original *http.Request, upstreamURL string, req anthropic.Request, model string, toolNames responseToolNameMap) error {
+	upReq, err := newAnthropicRequest(ctx, original, upstreamURL, req, true)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return err
+	}
+	resp, err := h.client.Do(upReq)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "model provider request failed")
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		slog.Warn("anthropic upstream error", "status", resp.StatusCode, "body", string(raw))
+		writeUpstreamJSONError(w, resp.StatusCode, raw)
+		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
+	}
+	streamAnthropicSSEToResponses(w, resp.Body, model, toolNames)
+	return nil
+}
+
+func newAnthropicRequest(ctx context.Context, original *http.Request, upstreamURL string, req anthropic.Request, stream bool) (*http.Request, error) {
+	req.Stream = stream
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	upReq.Header.Set("Content-Type", "application/json")
+	upReq.Header.Set("Anthropic-Version", firstNonEmpty(original.Header.Get("Anthropic-Version"), "2023-06-01"))
+	if beta := original.Header.Get("Anthropic-Beta"); beta != "" {
+		upReq.Header.Set("Anthropic-Beta", beta)
+	}
+	copyAuthToAnthropic(upReq.Header, original.Header)
+	if stream {
+		upReq.Header.Set("Accept", "text/event-stream")
+	}
+	return upReq, nil
 }
 
 func copyAuthToAnthropic(dst, src http.Header) {
@@ -164,6 +194,27 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"type":    "invalid_request_error",
+			"message": message,
+		},
+	})
+}
+
+func writeUpstreamJSONError(w http.ResponseWriter, status int, raw []byte) {
+	message := strings.TrimSpace(string(raw))
+	errorType := "api_error"
+	var anthErr anthropic.ErrorResponse
+	if json.Unmarshal(raw, &anthErr) == nil && strings.TrimSpace(anthErr.Error.Message) != "" {
+		message = anthErr.Error.Message
+		errorType = firstNonEmpty(anthErr.Error.Type, errorType)
+	}
+	if message == "" {
+		message = fmt.Sprintf("upstream returned HTTP %d", status)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{
+			"type":    errorType,
 			"message": message,
 		},
 	})

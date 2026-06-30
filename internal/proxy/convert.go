@@ -16,6 +16,10 @@ const (
 	anthropicWebSearchToolType  = "web_search_20260318"
 	anthropicWebFetchToolType   = "web_fetch_20260318"
 	defaultHostedWebToolMaxUses = 5
+	responseToolKindNamespace   = "namespace"
+	responseToolKindCustom      = "custom"
+	responseToolKindToolSearch  = "tool_search"
+	customToolInputField        = "input"
 )
 
 type convertedRequest struct {
@@ -51,6 +55,11 @@ func convertResponsesToAnthropic(req openairesp.Request, upstreamModel string) (
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		out.MaxTokens = *req.MaxOutputTokens
 	}
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		out.MaxTokens = *req.MaxTokens
+	}
+	out.StopSequences = stopSequencesFromRaw(req.Stop)
+	out.Metadata = rawJSONOption(req.Metadata)
 
 	systemParts := make([]string, 0, 2)
 	if strings.TrimSpace(req.Instructions) != "" {
@@ -123,7 +132,9 @@ func convertResponsesInput(input json.RawMessage) ([]anthropic.Message, []string
 			if args == "" && len(item.Action) > 0 && string(item.Action) != "null" {
 				args = string(item.Action)
 			}
-			if strings.TrimSpace(args) == "" {
+			if item.Type == "custom_tool_call" {
+				args = string(mustRawJSON(map[string]any{customToolInputField: args}))
+			} else if strings.TrimSpace(args) == "" {
 				args = "{}"
 			}
 			name := anthropicToolName(item.Namespace, item.Name)
@@ -183,12 +194,32 @@ func responsesContentToAnthropicBlocks(raw json.RawMessage, role string) []anthr
 			if text != "" {
 				blocks = append(blocks, anthropic.ContentBlock{Type: "text", Text: text})
 			}
+		case "refusal":
+			var text string
+			_ = json.Unmarshal(part["refusal"], &text)
+			if text != "" {
+				blocks = append(blocks, anthropic.ContentBlock{Type: "text", Text: text})
+			}
+		case "input_image":
+			if source := anthropicSourceFromInputImage(part); len(source) > 0 {
+				blocks = append(blocks, anthropic.ContentBlock{Type: "image", Source: source})
+			} else if role != "assistant" {
+				blocks = append(blocks, unsupportedContentBlock(part))
+			}
+		case "input_file":
+			if source := anthropicSourceFromInputFile(part); len(source) > 0 {
+				blocks = append(blocks, anthropic.ContentBlock{Type: "document", Source: source})
+			} else if role != "assistant" {
+				blocks = append(blocks, unsupportedContentBlock(part))
+			}
+		case "input_audio":
+			if role != "assistant" {
+				blocks = append(blocks, unsupportedContentBlock(part))
+			}
 		default:
 			// Keep unsupported structured content visible rather than silently losing it.
 			if role != "assistant" {
-				if b, err := json.Marshal(part); err == nil {
-					blocks = append(blocks, anthropic.ContentBlock{Type: "text", Text: string(b)})
-				}
+				blocks = append(blocks, unsupportedContentBlock(part))
 			}
 		}
 	}
@@ -209,6 +240,7 @@ type responseToolNameMap map[string]responseToolName
 type responseToolName struct {
 	Namespace string
 	Name      string
+	Kind      string
 }
 
 func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
@@ -226,6 +258,13 @@ func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
 		out.Tools = append(out.Tools, tool)
 	}
 	for _, raw := range rawTools {
+		var toolName string
+		if json.Unmarshal(raw, &toolName) == nil && strings.TrimSpace(toolName) != "" {
+			customTool := convertResponsesCustomTool(toolName, "", nil)
+			out.Tools = append(out.Tools, customTool)
+			out.Names[customTool.Name] = responseToolName{Name: toolName, Kind: responseToolKindCustom}
+			continue
+		}
 		var tool map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &tool); err != nil {
 			continue
@@ -265,8 +304,31 @@ func convertResponsesTools(rawTools []json.RawMessage) (convertedTools, error) {
 				out.Names[childTool.Name] = responseToolName{
 					Namespace: namespaceName,
 					Name:      childToolName(childTool.Name, namespaceName),
+					Kind:      responseToolKindNamespace,
 				}
 			}
+			continue
+		}
+		if typ == "custom" {
+			var name, description string
+			_ = json.Unmarshal(tool["name"], &name)
+			_ = json.Unmarshal(tool["description"], &description)
+			if name == "" {
+				continue
+			}
+			customTool := convertResponsesCustomTool(name, description, tool)
+			out.Tools = append(out.Tools, customTool)
+			out.Names[customTool.Name] = responseToolName{Name: name, Kind: responseToolKindCustom}
+			continue
+		}
+		if typ == "tool_search" {
+			tool := anthropic.Tool{
+				Name:        proxyToolSearchToolName(),
+				Description: "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}`),
+			}
+			out.Tools = append(out.Tools, tool)
+			out.Names[tool.Name] = responseToolName{Name: tool.Name, Kind: responseToolKindToolSearch}
 			continue
 		}
 		if typ != "function" {
@@ -340,12 +402,26 @@ func convertResponsesFunctionTool(tool map[string]json.RawMessage, namespaceDesc
 	}
 	schema := tool["parameters"]
 	if len(schema) == 0 || string(schema) == "null" {
+		schema = tool["input_schema"]
+	}
+	if len(schema) == 0 || string(schema) == "null" {
 		schema = json.RawMessage(`{"type":"object","properties":{}}`)
 	}
 	if namespaceDescription != "" {
 		description = strings.TrimSpace(strings.Join([]string{namespaceDescription, description}, "\n\n"))
 	}
 	return anthropic.Tool{Name: name, Description: description, InputSchema: schema}, true
+}
+
+func convertResponsesCustomTool(name, description string, raw map[string]json.RawMessage) anthropic.Tool {
+	if strings.TrimSpace(description) == "" && raw != nil {
+		description = stringFromRaw(raw["description"])
+	}
+	return anthropic.Tool{
+		Name:        name,
+		Description: description,
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string","description":"Raw string input for the original custom tool."}},"required":["input"]}`),
+	}
 }
 
 func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
@@ -363,7 +439,7 @@ func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
 	}
 	var m map[string]any
 	if json.Unmarshal(raw, &m) == nil {
-		if typ, _ := m["type"].(string); typ == "function" {
+		if typ, _ := m["type"].(string); typ == "function" || typ == "custom" {
 			if name, _ := m["name"].(string); name != "" {
 				return map[string]any{"type": "tool", "name": name}
 			}
@@ -371,6 +447,8 @@ func convertResponsesToolChoice(raw json.RawMessage, hasTools bool) any {
 			return map[string]any{"type": "tool", "name": proxyWebSearchToolName}
 		} else if isResponsesFetchTool(typ) {
 			return map[string]any{"type": "tool", "name": proxyWebFetchToolName}
+		} else if typ == "tool_search" {
+			return map[string]any{"type": "tool", "name": proxyToolSearchToolName()}
 		}
 	}
 	return nil
@@ -381,6 +459,23 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 	fetchDocuments := make([]fetchedDocument, 0)
 	for _, block := range resp.Content {
 		switch block.Type {
+		case "thinking", "redacted_thinking":
+			thinking := strings.TrimSpace(block.Thinking)
+			if thinking == "" {
+				thinking = strings.TrimSpace(block.Text)
+			}
+			if thinking == "" {
+				continue
+			}
+			output = append(output, openairesp.OutputItem{
+				ID:     randomID("rs_"),
+				Type:   "reasoning",
+				Status: "completed",
+				Summary: []openairesp.SummaryPart{{
+					Type: "summary_text",
+					Text: thinking,
+				}},
+			})
 		case "text":
 			if block.Text == "" {
 				continue
@@ -401,15 +496,7 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 			if len(block.Input) > 0 && string(block.Input) != "null" {
 				args = string(block.Input)
 			}
-			output = append(output, openairesp.OutputItem{
-				ID:        randomID("fc_"),
-				Type:      "function_call",
-				Status:    "completed",
-				CallID:    firstNonEmpty(block.ID, randomID("call_")),
-				Namespace: responseToolNamespace(block.Name, toolNames),
-				Name:      responseToolNameOnly(block.Name, toolNames),
-				Arguments: args,
-			})
+			output = append(output, responseToolUseToOutputItem(block, args, toolNames))
 		case "server_tool_use":
 			item, ok := convertServerToolUseToResponses(block)
 			if ok {
@@ -422,13 +509,102 @@ func convertAnthropicToResponses(resp anthropic.Response, model string, toolName
 			continue
 		}
 	}
-	usage := &openairesp.Usage{}
-	if resp.Usage != nil {
-		input := resp.Usage.TotalInput()
-		outputTokens := resp.Usage.OutputTokens
-		usage = &openairesp.Usage{InputTokens: input, OutputTokens: outputTokens, TotalTokens: input + outputTokens}
+	out := openairesp.NewResponse(firstNonEmpty(resp.ID, randomID("resp_")), firstNonEmpty(model, resp.Model), output, usageFromAnthropic(resp.Usage))
+	out.Status = responsesStatusFromAnthropicStop(resp.StopReason)
+	if resp.StopReason == "max_tokens" {
+		out.IncompleteDetails = &openairesp.IncompleteDetails{Reason: "max_output_tokens"}
 	}
-	return openairesp.NewResponse(firstNonEmpty(resp.ID, randomID("resp_")), firstNonEmpty(model, resp.Model), output, usage)
+	return out
+}
+
+func responseToolUseToOutputItem(block anthropic.ContentBlock, args string, toolNames responseToolNameMap) openairesp.OutputItem {
+	callID := firstNonEmpty(block.ID, randomID("call_"))
+	tool := responseToolInfo(block.Name, toolNames)
+	switch tool.Kind {
+	case responseToolKindCustom:
+		return openairesp.OutputItem{
+			ID:     randomID("ctc_"),
+			Type:   "custom_tool_call",
+			Status: "completed",
+			CallID: callID,
+			Name:   tool.Name,
+			Input:  customToolInputFromArguments(args),
+		}
+	case responseToolKindToolSearch:
+		return openairesp.OutputItem{
+			ID:        randomID("ts_"),
+			Type:      "tool_search_call",
+			Status:    "completed",
+			CallID:    callID,
+			Arguments: args,
+		}
+	default:
+		return openairesp.OutputItem{
+			ID:        randomID("fc_"),
+			Type:      "function_call",
+			Status:    "completed",
+			CallID:    callID,
+			Namespace: tool.Namespace,
+			Name:      tool.Name,
+			Arguments: args,
+		}
+	}
+}
+
+func responseToolInfo(name string, toolNames responseToolNameMap) responseToolName {
+	if mapped, ok := toolNames[name]; ok {
+		if mapped.Name == "" {
+			mapped.Name = name
+		}
+		return mapped
+	}
+	return responseToolName{Name: name}
+}
+
+func customToolInputFromArguments(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return ""
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(args), &payload) == nil {
+		if input, ok := payload[customToolInputField].(string); ok {
+			return input
+		}
+	}
+	return args
+}
+
+func usageFromAnthropic(usage *anthropic.Usage) *openairesp.Usage {
+	if usage == nil {
+		return &openairesp.Usage{
+			OutputTokensDetails: &openairesp.OutputTokensDetails{ReasoningTokens: 0},
+		}
+	}
+	input := usage.TotalInput()
+	out := &openairesp.Usage{
+		InputTokens:              input,
+		OutputTokens:             usage.OutputTokens,
+		TotalTokens:              input + usage.OutputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		OutputTokensDetails:      &openairesp.OutputTokensDetails{ReasoningTokens: 0},
+	}
+	if usage.CacheReadInputTokens > 0 {
+		out.InputTokensDetails = &openairesp.InputTokensDetails{
+			CachedTokens: usage.CacheReadInputTokens,
+		}
+	}
+	return out
+}
+
+func responsesStatusFromAnthropicStop(stopReason string) string {
+	switch stopReason {
+	case "max_tokens":
+		return "incomplete"
+	default:
+		return "completed"
+	}
 }
 
 func convertServerToolUseToResponses(block anthropic.ContentBlock) (openairesp.OutputItem, bool) {
@@ -473,20 +649,6 @@ func anthropicToolName(namespace, name string) string {
 func childToolName(flatName, namespace string) string {
 	prefix := strings.TrimRight(namespace, "_") + "__"
 	return strings.TrimPrefix(flatName, prefix)
-}
-
-func responseToolNamespace(name string, toolNames responseToolNameMap) string {
-	if mapped, ok := toolNames[name]; ok {
-		return mapped.Namespace
-	}
-	return ""
-}
-
-func responseToolNameOnly(name string, toolNames responseToolNameMap) string {
-	if mapped, ok := toolNames[name]; ok {
-		return mapped.Name
-	}
-	return name
 }
 
 func stringFieldFromJSON(raw json.RawMessage, field string) string {
@@ -687,6 +849,112 @@ func rawJSONOption(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
+func stopSequencesFromRaw(raw json.RawMessage) []string {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return nil
+	}
+	var single string
+	if json.Unmarshal(raw, &single) == nil {
+		if strings.TrimSpace(single) == "" {
+			return nil
+		}
+		return []string{single}
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) != nil {
+		return nil
+	}
+	return cleanStringSlice(many)
+}
+
+func unsupportedContentBlock(part map[string]json.RawMessage) anthropic.ContentBlock {
+	if b, err := json.Marshal(part); err == nil {
+		return anthropic.ContentBlock{Type: "text", Text: string(b)}
+	}
+	return anthropic.ContentBlock{Type: "text", Text: "[Unsupported content]"}
+}
+
+func anthropicSourceFromInputImage(part map[string]json.RawMessage) json.RawMessage {
+	raw := part["image_url"]
+	if len(raw) == 0 || string(raw) == "null" {
+		raw = part["url"]
+	}
+	urlValue := imageURLFromRaw(raw)
+	if urlValue == "" {
+		return nil
+	}
+	return anthropicSourceFromURL(urlValue, "image/png")
+}
+
+func anthropicSourceFromInputFile(part map[string]json.RawMessage) json.RawMessage {
+	for _, key := range []string{"file_data", "file_url", "url"} {
+		if value := imageURLFromRaw(part[key]); value != "" {
+			mediaType := firstNonEmpty(
+				stringFromRaw(part["media_type"]),
+				stringFromRaw(part["mime_type"]),
+				"application/octet-stream",
+			)
+			return anthropicSourceFromURL(value, mediaType)
+		}
+	}
+	return nil
+}
+
+func imageURLFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var urlString string
+	if json.Unmarshal(raw, &urlString) == nil {
+		return strings.TrimSpace(urlString)
+	}
+	var payload struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(raw, &payload) == nil {
+		return strings.TrimSpace(payload.URL)
+	}
+	return ""
+}
+
+func anthropicSourceFromURL(value, defaultMediaType string) json.RawMessage {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if mediaType, data, ok := parseDataURL(value); ok {
+		return mustRawJSON(map[string]any{
+			"type":       "base64",
+			"media_type": firstNonEmpty(mediaType, defaultMediaType),
+			"data":       data,
+		})
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return mustRawJSON(map[string]any{
+			"type": "url",
+			"url":  value,
+		})
+	}
+	return nil
+}
+
+func parseDataURL(value string) (string, string, bool) {
+	if !strings.HasPrefix(value, "data:") {
+		return "", "", false
+	}
+	meta, data, ok := strings.Cut(strings.TrimPrefix(value, "data:"), ",")
+	if !ok || !strings.Contains(meta, ";base64") {
+		return "", "", false
+	}
+	mediaType := strings.TrimSuffix(meta, ";base64")
+	return mediaType, data, true
+}
+
+func mustRawJSON(value any) json.RawMessage {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
 func textFromBlocks(blocks []anthropic.ContentBlock) string {
 	var parts []string
 	for _, block := range blocks {
@@ -721,4 +989,8 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func proxyToolSearchToolName() string {
+	return "tool_search"
 }
