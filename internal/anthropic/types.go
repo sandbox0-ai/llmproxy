@@ -27,9 +27,12 @@ type ContentBlock struct {
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
+	Source    json.RawMessage `json:"source,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   any             `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 	Citations []Citation      `json:"citations,omitempty"`
 }
 
@@ -67,6 +70,16 @@ type Response struct {
 	StopReason   string         `json:"stop_reason"`
 	StopSequence string         `json:"stop_sequence,omitempty"`
 	Usage        *Usage         `json:"usage,omitempty"`
+}
+
+type ErrorResponse struct {
+	Type  string         `json:"type,omitempty"`
+	Error AnthropicError `json:"error"`
+}
+
+type AnthropicError struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type Usage struct {
