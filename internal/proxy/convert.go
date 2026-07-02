@@ -141,23 +141,17 @@ func convertResponsesInput(input json.RawMessage) ([]anthropic.Message, []string
 			if name == "" && item.Type == "local_shell_call" {
 				name = "shell"
 			}
-			messages = append(messages, anthropic.Message{
-				Role: "assistant",
-				Content: []anthropic.ContentBlock{{
-					Type:  "tool_use",
-					ID:    firstNonEmpty(item.CallID, item.ID, randomID("toolu_")),
-					Name:  name,
-					Input: json.RawMessage(args),
-				}},
+			appendToolBlockMessage(&messages, "assistant", anthropic.ContentBlock{
+				Type:  "tool_use",
+				ID:    firstNonEmpty(item.CallID, item.ID, randomID("toolu_")),
+				Name:  name,
+				Input: json.RawMessage(args),
 			})
 		case strings.HasSuffix(item.Type, "_output"):
-			messages = append(messages, anthropic.Message{
-				Role: "user",
-				Content: []anthropic.ContentBlock{{
-					Type:      "tool_result",
-					ToolUseID: item.CallID,
-					Content:   toolOutputText(item.Output),
-				}},
+			appendToolBlockMessage(&messages, "user", anthropic.ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: item.CallID,
+				Content:   toolOutputText(item.Output),
 			})
 		case item.Type == "reasoning" || item.Type == "compaction" || item.Type == "web_search_call" ||
 			item.Type == "web_fetch_call" ||
@@ -169,6 +163,32 @@ func convertResponsesInput(input json.RawMessage) ([]anthropic.Message, []string
 		return nil, nil, fmt.Errorf("no supported input items")
 	}
 	return messages, systemParts, nil
+}
+
+func appendToolBlockMessage(messages *[]anthropic.Message, role string, block anthropic.ContentBlock) {
+	if len(*messages) > 0 {
+		last := &(*messages)[len(*messages)-1]
+		if last.Role == role && allBlocksHaveType(last.Content, block.Type) {
+			last.Content = append(last.Content, block)
+			return
+		}
+	}
+	*messages = append(*messages, anthropic.Message{
+		Role:    role,
+		Content: []anthropic.ContentBlock{block},
+	})
+}
+
+func allBlocksHaveType(blocks []anthropic.ContentBlock, typ string) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type != typ {
+			return false
+		}
+	}
+	return true
 }
 
 func responsesContentToAnthropicBlocks(raw json.RawMessage, role string) []anthropic.ContentBlock {

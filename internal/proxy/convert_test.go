@@ -43,6 +43,46 @@ func TestConvertResponsesToAnthropicTextAndTool(t *testing.T) {
 	}
 }
 
+func TestConvertResponsesGroupsParallelToolCallsAndOutputs(t *testing.T) {
+	req := openairesp.Request{
+		Model: "test-model",
+		Input: json.RawMessage(`[
+			{"role":"user","content":[{"type":"input_text","text":"run checks"}]},
+			{"type":"function_call","call_id":"exec_command:1","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}"},
+			{"type":"function_call","call_id":"exec_command:2","name":"exec_command","arguments":"{\"cmd\":\"ls\"}"},
+			{"type":"function_call_output","call_id":"exec_command:1","output":"ok 1"},
+			{"type":"function_call_output","call_id":"exec_command:2","output":"ok 2"}
+		]`),
+	}
+	got, err := convertResponsesToAnthropic(req, "")
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if len(got.Request.Messages) != 3 {
+		t.Fatalf("messages len = %d", len(got.Request.Messages))
+	}
+	toolUses := got.Request.Messages[1]
+	if toolUses.Role != "assistant" || len(toolUses.Content) != 2 {
+		t.Fatalf("tool use message = %#v", toolUses)
+	}
+	if toolUses.Content[0].Type != "tool_use" || toolUses.Content[0].ID != "exec_command:1" {
+		t.Fatalf("first tool use = %#v", toolUses.Content[0])
+	}
+	if toolUses.Content[1].Type != "tool_use" || toolUses.Content[1].ID != "exec_command:2" {
+		t.Fatalf("second tool use = %#v", toolUses.Content[1])
+	}
+	toolResults := got.Request.Messages[2]
+	if toolResults.Role != "user" || len(toolResults.Content) != 2 {
+		t.Fatalf("tool result message = %#v", toolResults)
+	}
+	if toolResults.Content[0].Type != "tool_result" || toolResults.Content[0].ToolUseID != "exec_command:1" || toolResults.Content[0].Content != "ok 1" {
+		t.Fatalf("first tool result = %#v", toolResults.Content[0])
+	}
+	if toolResults.Content[1].Type != "tool_result" || toolResults.Content[1].ToolUseID != "exec_command:2" || toolResults.Content[1].Content != "ok 2" {
+		t.Fatalf("second tool result = %#v", toolResults.Content[1])
+	}
+}
+
 func TestConvertResponsesWebSearchTool(t *testing.T) {
 	req := openairesp.Request{
 		Model: "test-model",
